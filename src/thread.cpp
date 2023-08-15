@@ -142,6 +142,9 @@ void ThreadPool::set(size_t requested) {
       // Reallocate the hash with the new threadpool size
       TT.resize(size_t(Options["Hash"]));
 
+      // Adjust cluster buffers
+      Cluster::ttSendRecvBuff_resize(requested);
+
       // Init thread number dependent search params.
       Search::init();
   }
@@ -195,12 +198,14 @@ void ThreadPool::start_thinking(Position& pos, StateListPtr& states,
   // since they are read-only.
   for (Thread* th : threads)
   {
-      th->nodes = th->tbHits = th->nmpMinPly = th->bestMoveChanges = 0;
+      th->nodes = th->tbHits = th->TTsaves = th->nmpMinPly = th->bestMoveChanges = 0;
       th->rootDepth = th->completedDepth = 0;
       th->rootMoves = rootMoves;
       th->rootPos.set(pos, &th->rootState, th);
       th->rootState = setupStates->back();
   }
+
+  Cluster::signals_init();
 
   main()->start_searching();
 }

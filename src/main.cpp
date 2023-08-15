@@ -25,7 +25,9 @@ using namespace Stockfish;
 
 int main(int argc, char* argv[]) {
 
-  std::cout << engine_info() << std::endl;
+  Cluster::init();
+  if (Cluster::is_root())
+      std::cout << engine_info() << std::endl;
 
   CommandLine::init(argc, argv);
   UCI::init(Options);
@@ -39,5 +41,6 @@ int main(int argc, char* argv[]) {
   UCI::loop(argc, argv);
 
   Threads.set(0);
+  Cluster::finalize();
   return 0;
 }

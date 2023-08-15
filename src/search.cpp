@@ -23,6 +23,7 @@
 #include <iostream>
 #include <sstream>
 
+#include "cluster.h"
 #include "evaluate.h"
 #include "misc.h"
 #include "movegen.h"
@@ -115,7 +116,7 @@ namespace {
             nodes += cnt;
             pos.undo_move(m);
         }
-        if (Root)
+        if (Root && Cluster::is_root())
             sync_cout << UCI::move(m) << ": " << cnt << sync_endl;
     }
     return nodes;
@@ -153,7 +154,9 @@ void MainThread::search() {
   if (Limits.perft)
   {
       nodes = perft<true>(rootPos, Limits.perft);
-      sync_cout << "\nNodes searched: " << nodes << "\n" << sync_endl;
+      if (Cluster::is_root())
+          sync_cout << "\nNodes searched: " << nodes << "\n" << sync_endl;
+
       return;
   }
 
@@ -166,9 +169,10 @@ void MainThread::search() {
   if (rootMoves.empty())
   {
       rootMoves.emplace_back(MOVE_NONE);
-      sync_cout << "info depth 0 score "
-                << UCI::value(-VALUE_MATE)
-                << sync_endl;
+      if (Cluster::is_root())
+          sync_cout << "info depth 0 score "
+                    << UCI::value(-VALUE_MATE)
+                    << sync_endl;
   }
   else
   {
@@ -183,11 +187,14 @@ void MainThread::search() {
   // until the GUI sends one of those commands.
 
   while (!Threads.stop && (ponder || Limits.infinite))
-  {} // Busy wait for a stop or a ponder reset
+  { Cluster::signals_poll(); } // Busy wait for a stop or a ponder reset
 
   // Stop the threads if not already stopped (also raise the stop if
   // "ponderhit" just reset Threads.ponder).
   Threads.stop = true;
+
+  // Signal and synchronize all other ranks
+  Cluster::signals_sync();
 
   // Wait until all threads have finished
   Threads.wait_for_search_finished();
@@ -195,7 +202,7 @@ void MainThread::search() {
   // When playing in 'nodes as time' mode, subtract the searched nodes from
   // the available ones before exiting.
   if (Limits.npmsec)
-      Time.availableNodes += Limits.inc[us] - Threads.nodes_searched();
+      Time.availableNodes += Limits.inc[us] - Cluster::nodes_searched();
 
   Thread* bestThread = this;
 
@@ -204,19 +211,39 @@ void MainThread::search() {
       && rootMoves[0].pv[0] != MOVE_NONE)
       bestThread = Threads.get_best_thread();
 
+  // Prepare PVLine and ponder move
+  std::string PVLine = UCI::pv(bestThread->rootPos, bestThread->completedDepth);
   bestPreviousScore = bestThread->rootMoves[0].score;
   bestPreviousAverageScore = bestThread->rootMoves[0].averageScore;
 
-  // Send again PV info if we have a new best thread
-  if (bestThread != this)
-      sync_cout << UCI::pv(bestThread->rootPos, bestThread->completedDepth) << sync_endl;
-
-  sync_cout << "bestmove " << UCI::move(bestThread->rootMoves[0].pv[0]);
-
+  Move bestMove   = bestThread->rootMoves[0].pv[0];
+  Move ponderMove = MOVE_NONE;
   if (bestThread->rootMoves[0].pv.size() > 1 || bestThread->rootMoves[0].extract_ponder_from_tt(rootPos))
-      std::cout << " ponder " << UCI::move(bestThread->rootMoves[0].pv[1]);
+      ponderMove = bestThread->rootMoves[0].pv[1];
 
-  std::cout << sync_endl;
+  // Exchange info as needed
+  Cluster::MoveInfo mi{bestMove,
+                       ponderMove,
+                       bestThread->completedDepth,
+                       bestThread->rootMoves[0].score,
+                       Cluster::rank()};
+  Cluster::pick_moves(mi, PVLine);
+
+  bestPreviousScore = static_cast<Value>(mi.score);
+
+  if (Cluster::is_root())
+  {
+      // Send again PV info if we have a new best thread/rank
+      if (bestThread != this || mi.rank != 0)
+          sync_cout << PVLine << sync_endl;
+      bestMove = static_cast<Move>(mi.move);
+      ponderMove = static_cast<Move>(mi.ponder);
+      if (ponderMove != MOVE_NONE)
+          sync_cout << "bestmove " << UCI::move(bestMove)
+                    << " ponder "  << UCI::move(ponderMove) << sync_endl;
+      else
+          sync_cout << "bestmove " << UCI::move(bestMove) << sync_endl;
+  }
 }
 
 
@@ -274,7 +301,7 @@ void Thread::search() {
   // Iterative deepening loop until requested to stop or the target depth is reached
   while (   ++rootDepth < MAX_PLY
          && !Threads.stop
-         && !(Limits.depth && mainThread && rootDepth > Limits.depth))
+         && !(Limits.depth && mainThread && Cluster::is_root() && rootDepth > Limits.depth))
   {
       // Age out PV variability metric
       if (mainThread)
@@ -335,11 +362,15 @@ void Thread::search() {
 
               // When failing high/low give some update (without cluttering
               // the UI) before a re-search.
-              if (   mainThread
+              if (   Cluster::is_root()
+                  && mainThread
                   && multiPV == 1
                   && (bestValue <= alpha || bestValue >= beta)
                   && Time.elapsed() > 3000)
+              {
                   sync_cout << UCI::pv(rootPos, rootDepth) << sync_endl;
+                  Cluster::cluster_info(rootDepth);
+              }
 
               // In case of failing low/high increase aspiration window and
               // re-search, otherwise exit the loop.
@@ -368,9 +399,12 @@ void Thread::search() {
           // Sort the PV lines searched so far and update the GUI
           std::stable_sort(rootMoves.begin() + pvFirst, rootMoves.begin() + pvIdx + 1);
 
-          if (    mainThread
+          if (    Cluster::is_root() && mainThread
               && (Threads.stop || pvIdx + 1 == multiPV || Time.elapsed() > 3000))
+          {
               sync_cout << UCI::pv(rootPos, rootDepth) << sync_endl;
+              Cluster::cluster_info(rootDepth);
+          }
       }
 
       if (!Threads.stop)
@@ -613,7 +647,8 @@ namespace {
     {
         ss->staticEval = eval = evaluate(pos);
         // Save static evaluation into the transposition table
-        tte->save(posKey, VALUE_NONE, ss->ttPv, BOUND_NONE, DEPTH_NONE, MOVE_NONE, eval);
+        Cluster::save(thisThread, tte,
+              posKey, VALUE_NONE, ss->ttPv, BOUND_NONE, DEPTH_NONE, MOVE_NONE, eval);
     }
 
     // Use static evaluation difference to improve quiet move ordering (~3 Elo)
@@ -759,7 +794,8 @@ namespace {
                 if (value >= probCutBeta)
                 {
                     // Save ProbCut data into transposition table
-                    tte->save(posKey, value_to_tt(value, ss->ply), ss->ttPv, BOUND_LOWER, depth - 3, move, ss->staticEval);
+                    Cluster::save(thisThread, tte, posKey, value_to_tt(value, ss->ply), ss->ttPv,
+                                  BOUND_LOWER, depth - 3, move, ss->staticEval);
                     return value;
                 }
             }
@@ -1237,10 +1273,11 @@ moves_loop: // When in check, search starts here
 
     // Write gathered information in transposition table
     if (!excludedMove && !(rootNode && thisThread->pvIdx))
-        tte->save(posKey, value_to_tt(bestValue, ss->ply), ss->ttPv,
-                  bestValue >= beta ? BOUND_LOWER :
-                  PvNode && bestMove ? BOUND_EXACT : BOUND_UPPER,
-                  depth, bestMove, ss->staticEval);
+        Cluster::save(thisThread, tte,
+                      posKey, value_to_tt(bestValue, ss->ply), ss->ttPv,
+                      bestValue >= beta ? BOUND_LOWER :
+                      PvNode && bestMove ? BOUND_EXACT : BOUND_UPPER,
+                      depth, bestMove, ss->staticEval);
 
     assert(bestValue > -VALUE_INFINITE && bestValue < VALUE_INFINITE);
 
@@ -1341,7 +1378,9 @@ moves_loop: // When in check, search starts here
         {
             // Save gathered info in transposition table
             if (!ss->ttHit)
-                tte->save(posKey, bestValue, false, BOUND_LOWER, DEPTH_NONE, MOVE_NONE, ss->staticEval);
+                Cluster::save(thisThread, tte,
+                              posKey, value_to_tt(bestValue, ss->ply), false, BOUND_LOWER,
+                              DEPTH_NONE, MOVE_NONE, ss->staticEval);
 
             return bestValue;
         }
@@ -1474,9 +1513,10 @@ moves_loop: // When in check, search starts here
     }
 
     // Save gathered info in transposition table
-    tte->save(posKey, value_to_tt(bestValue, ss->ply), pvHit,
-              bestValue >= beta ? BOUND_LOWER : BOUND_UPPER,
-              ttDepth, bestMove, ss->staticEval);
+    Cluster::save(thisThread, tte,
+                  posKey, value_to_tt(bestValue, ss->ply), pvHit,
+                  bestValue >= beta ? BOUND_LOWER : BOUND_UPPER,
+                  ttDepth, bestMove, ss->staticEval);
 
     assert(bestValue > -VALUE_INFINITE && bestValue < VALUE_INFINITE);
 
@@ -1645,13 +1685,16 @@ void MainThread::check_time() {
       dbg_print();
   }
 
+  // poll on MPI signals
+  Cluster::signals_poll();
+
   // We should not stop pondering until told so by the GUI
   if (ponder)
       return;
 
   if (   (Limits.use_time_management() && (elapsed > Time.maximum() || stopOnPonderhit))
       || (Limits.movetime && elapsed >= Limits.movetime)
-      || (Limits.nodes && Threads.nodes_searched() >= (uint64_t)Limits.nodes))
+      || (Limits.nodes && Cluster::nodes_searched() >= (uint64_t)Limits.nodes))
       Threads.stop = true;
 }
 
@@ -1666,7 +1709,7 @@ string UCI::pv(const Position& pos, Depth depth) {
   const RootMoves& rootMoves = pos.this_thread()->rootMoves;
   size_t pvIdx = pos.this_thread()->pvIdx;
   size_t multiPV = std::min((size_t)Options["MultiPV"], rootMoves.size());
-  uint64_t nodesSearched = Threads.nodes_searched();
+  uint64_t nodesSearched = Cluster::nodes_searched();
 
   for (size_t i = 0; i < multiPV; ++i)
   {

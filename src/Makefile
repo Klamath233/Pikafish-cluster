@@ -52,7 +52,7 @@ BINDIR = $(PREFIX)/bin
 PGOBENCH = $(WINE_PATH) ./$(EXE) bench
 
 ### Source and object files
-SRCS = benchmark.cpp bitboard.cpp evaluate.cpp main.cpp \
+SRCS = benchmark.cpp bitboard.cpp cluster.cpp evaluate.cpp main.cpp \
 	misc.cpp movegen.cpp movepick.cpp position.cpp \
 	search.cpp thread.cpp timeman.cpp tt.cpp uci.cpp ucioption.cpp tune.cpp \
 	nnue/evaluate_nnue.cpp nnue/features/half_ka_v2_hm.cpp \
@@ -92,6 +92,7 @@ VPATH = external:nnue:nnue/features
 # vnni256 = yes/no    --- -mavx256vnni       --- Use Intel Vector Neural Network Instructions 512 with 256bit operands
 # vnni512 = yes/no    --- -mavx512vnni       --- Use Intel Vector Neural Network Instructions 512
 # neon = yes/no       --- -DUSE_NEON         --- Use ARM SIMD architecture
+# mpi = yes/no        --- -DUSE_MPI        --- Use Message Passing Interface
 # dotprod = yes/no    --- -DUSE_NEON_DOTPROD --- Use ARM advanced SIMD Int8 dot product instructions
 #
 # Note that Makefile is space sensitive, so when adding new architectures
@@ -138,6 +139,7 @@ avx512 = no
 vnni256 = no
 vnni512 = no
 neon = no
+mpi = no
 dotprod = no
 arm_version = 0
 STRIP = strip
@@ -755,6 +757,15 @@ ifeq ($(OS), Android)
 	LDFLAGS += -fPIE -pie
 endif
 
+### 3.10 MPI
+ifneq (,$(findstring mpi, $(CXX)))
+	mpi = yes
+endif
+ifeq ($(mpi),yes)
+	CXXFLAGS += -DUSE_MPI -Wno-cast-qual -fexceptions
+        DEPENDFLAGS += -DUSE_MPI
+endif
+
 ### ==========================================================================
 ### Section 4. Public Targets
 ### ==========================================================================
@@ -917,6 +928,7 @@ config-sanity: net
 	@echo "vnni256: '$(vnni256)'"
 	@echo "vnni512: '$(vnni512)'"
 	@echo "neon: '$(neon)'"
+	@echo "mpi: '$(mpi)'"
 	@echo "dotprod: '$(dotprod)'"
 	@echo "arm_version: '$(arm_version)'"
 	@echo "target_windows: '$(target_windows)'"

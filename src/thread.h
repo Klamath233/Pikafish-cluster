@@ -25,6 +25,7 @@
 #include <thread>
 #include <vector>
 
+#include "cluster.h"
 #include "movepick.h"
 #include "position.h"
 #include "search.h"
@@ -56,7 +57,7 @@ public:
   size_t id() const { return idx; }
 
   size_t pvIdx, pvLast;
-  std::atomic<uint64_t> nodes, tbHits, bestMoveChanges;
+  std::atomic<uint64_t> nodes, tbHits, TTsaves, bestMoveChanges;
   int selDepth, nmpMinPly;
   Value bestValue, optimism[COLOR_NB];
 
@@ -69,6 +70,12 @@ public:
   ButterflyHistory mainHistory;
   CapturePieceToHistory captureHistory;
   ContinuationHistory continuationHistory[2][2];
+#ifdef USE_MPI
+  struct {
+      std::mutex mutex;
+      Cluster::TTCache<Cluster::TTCacheSize> buffer = {};
+  } ttCache;
+#endif
 };
 
 
@@ -104,6 +111,7 @@ struct ThreadPool {
   MainThread* main()        const { return static_cast<MainThread*>(threads.front()); }
   uint64_t nodes_searched() const { return accumulate(&Thread::nodes); }
   uint64_t tb_hits()        const { return accumulate(&Thread::tbHits); }
+  uint64_t TT_saves()       const { return accumulate(&Thread::TTsaves); }
   Thread* get_best_thread() const;
   void start_searching();
   void wait_for_search_finished() const;

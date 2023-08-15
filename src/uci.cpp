@@ -24,6 +24,7 @@
 
 #include "benchmark.h"
 #include "evaluate.h"
+#include "cluster.h"
 #include "movegen.h"
 #include "position.h"
 #include "search.h"
@@ -111,7 +112,7 @@ namespace {
 
     if (Options.count(name))
         Options[name] = value;
-    else
+    else if (Cluster::is_root())
         sync_cout << "No such option: " << name << sync_endl;
   }
 
@@ -171,14 +172,16 @@ namespace {
 
         if (token == "go" || token == "eval")
         {
-            cerr << "\nPosition: " << cnt++ << '/' << num << " (" << pos.fen() << ")" << endl;
+            if (Cluster::is_root())
+                cerr << "\nPosition: " << cnt++ << '/' << num << " (" << pos.fen() << ")" << endl;
+
             if (token == "go")
             {
                go(pos, is, states);
                Threads.main()->wait_for_search_finished();
-               nodes += Threads.nodes_searched();
+               nodes += Cluster::nodes_searched();
             }
-            else
+            else if (Cluster::is_root())
                trace_eval(pos);
         }
         else if (token == "setoption")  setoption(is);
@@ -190,10 +193,11 @@ namespace {
 
     dbg_print();
 
-    cerr << "\n==========================="
-         << "\nTotal time (ms) : " << elapsed
-         << "\nNodes searched  : " << nodes
-         << "\nNodes/second    : " << 1000 * nodes / elapsed << endl;
+    if (Cluster::is_root())
+        cerr << "\n==========================="
+             << "\nTotal time (ms) : " << elapsed
+             << "\nNodes searched  : " << nodes
+             << "\nNodes/second    : " << 1000 * nodes / elapsed << endl;
   }
 
   // The win rate model returns the probability of winning (in per mille units) given an
@@ -243,7 +247,7 @@ void UCI::loop(int argc, char* argv[]) {
       cmd += std::string(argv[i]) + " ";
 
   do {
-      if (argc == 1 && !getline(cin, cmd)) // Wait for an input or an end-of-file (EOF) indication
+      if (argc == 1 && !Cluster::getline(cin, cmd)) // Wait for an input or an end-of-file (EOF) indication
           cmd = "quit";
 
       istringstream is(cmd);
@@ -262,7 +266,7 @@ void UCI::loop(int argc, char* argv[]) {
       else if (token == "ponderhit")
           Threads.main()->ponder = false; // Switch to the normal search
 
-      else if (token == "uci")
+      else if (token == "uci" && Cluster::is_root())
           sync_cout << "id name " << engine_info(true)
                     << "\n"       << Options
                     << "\nuciok"  << sync_endl;
@@ -272,16 +276,20 @@ void UCI::loop(int argc, char* argv[]) {
       else if (token == "position")   position(pos, is, states);
       else if (token == "fen" || token == "startpos") is.seekg(0), position(pos, is, states);
       else if (token == "ucinewgame") Search::clear();
-      else if (token == "isready")    sync_cout << "readyok" << sync_endl;
+      else if (token == "isready" && Cluster::is_root())
+          sync_cout << "readyok" << sync_endl;
 
       // Add custom non-UCI commands, mainly for debugging purposes.
       // These commands must not be used during a search!
       else if (token == "flip")     pos.flip();
       else if (token == "bench")    bench(pos, is, states);
-      else if (token == "d")        sync_cout << pos << sync_endl;
-      else if (token == "eval")     trace_eval(pos);
-      else if (token == "compiler") sync_cout << compiler_info() << sync_endl;
-      else if (token == "export_net")
+      else if (token == "d" && Cluster::is_root())
+          sync_cout << pos << sync_endl;
+      else if (token == "eval" && Cluster::is_root())
+          trace_eval(pos);
+      else if (token == "compiler" && Cluster::is_root())
+          sync_cout << compiler_info() << sync_endl;
+      else if (token == "export_net" && Cluster::is_root())
       {
           std::optional<std::string> filename;
           std::string f;
@@ -289,14 +297,14 @@ void UCI::loop(int argc, char* argv[]) {
               filename = f;
           Eval::NNUE::save_eval(filename);
       }
-      else if (token == "--help" || token == "help" || token == "--license" || token == "license")
+      else if ((token == "--help" || token == "help" || token == "--license" || token == "license") && Cluster::is_root())
           sync_cout << "\nPikafish is a powerful xiangqi engine for playing and analyzing."
                        "\nIt is released as free software licensed under the GNU GPLv3 License."
                        "\nPikafish is normally used with a graphical user interface (GUI) and implements"
                        "\nthe Universal Chess Interface (UCI) protocol to communicate with a GUI, an API, etc."
                        "\nFor any further information, visit https://github.com/official-pikafish/Pikafish#readme"
                        "\nor read the corresponding README.md and Copying.txt files distributed along with this program.\n" << sync_endl;
-      else if (!token.empty() && token[0] != '#')
+      else if (!token.empty() && token[0] != '#' && Cluster::is_root())
           sync_cout << "Unknown command: '" << cmd << "'. Type help for more information." << sync_endl;
 
   } while (token != "quit" && argc == 1); // The command-line arguments are one-shot

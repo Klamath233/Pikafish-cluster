@@ -26,6 +26,7 @@
 #include <vector>
 
 #include "bitboard.h"
+#include "cluster.h"
 #include "evaluate.h"
 #include "misc.h"
 #include "thread.h"
@@ -90,7 +91,9 @@ namespace Eval {
         exit(EXIT_FAILURE);
     }
 
-    sync_cout << "info string NNUE evaluation using " << eval_file << " enabled" << sync_endl;
+    if (Cluster::is_root()) {
+        sync_cout << "info string NNUE evaluation using " << eval_file << " enabled" << sync_endl;
+    }
   }
 }
 
