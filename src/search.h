@@ -24,6 +24,7 @@
 #include "misc.h"
 #include "movepick.h"
 #include "types.h"
+#include "cluster.h"
 
 namespace Stockfish {
 
@@ -93,7 +94,7 @@ struct LimitsType {
   }
 
   bool use_time_management() const {
-    return time[WHITE] || time[BLACK];
+    return Cluster::is_root() && (time[WHITE] || time[BLACK]);
   }
 
   std::vector<Move> searchmoves;

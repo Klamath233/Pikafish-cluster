@@ -24,6 +24,11 @@
 
 namespace Stockfish {
 
+//void Cluster::init();
+namespace Cluster {
+  void init();
+}
+
 /// TTEntry struct is the 10 bytes transposition table entry, defined as below:
 ///
 /// key        16 bit
@@ -47,6 +52,7 @@ struct TTEntry {
 
 private:
   friend class TranspositionTable;
+  friend void Cluster::init();
 
   uint16_t key16;
   uint8_t  depth8;
@@ -64,6 +70,8 @@ private:
 /// prefetched when possible.
 
 class TranspositionTable {
+
+  friend void Cluster::init();
 
   static constexpr int ClusterSize = 3;
 
