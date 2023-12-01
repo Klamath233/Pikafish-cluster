@@ -21,6 +21,10 @@
 #include <ostream>
 #include <sstream>
 
+#if defined(__GNUC__)
+#include <sys/sysinfo.h>
+#endif
+
 #include "evaluate.h"
 #include "misc.h"
 #include "search.h"
@@ -45,7 +49,18 @@ static void on_logger(const Option& o) { start_logger(o); }
 static void on_threads(const Option& o) { Threads.set(size_t(o)); }
 static void on_mate_threat_depth(const Option& o) { MateThreatDepth = size_t(o); }
 static void on_repetition_rule(const Option& o) { ChineseRule = o == "ChineseRule"; }
-static void on_eval_file(const Option& ) { Eval::NNUE::init(); }
+static void on_eval_file(const Option&) { Eval::NNUE::init(); }
+static void on_auto_thread_count(const Option& o) {
+  size_t requested = 1;
+  if (bool(o)) {
+#if defined(__GNUC__)
+    requested = (size_t) get_nprocs();
+#endif
+  } else {
+    requested = size_t(Options["Threads"]);
+  }
+  Threads.set(requested);
+}
 
 /// Our case insensitive less() function as required by UCI protocol
 bool CaseInsensitiveLess::operator() (const string& s1, const string& s2) const {
@@ -61,19 +76,21 @@ void init(OptionsMap& o) {
 
   constexpr int MaxHashMB = Is64Bit ? 33554432 : 2048;
 
-  o["Debug Log File"]        << Option("", on_logger);
-  o["Threads"]               << Option(1, 1, 1024, on_threads);
-  o["Hash"]                  << Option(16, 1, MaxHashMB, on_hash_size);
-  o["Clear Hash"]            << Option(on_clear_hash);
-  o["Ponder"]                << Option(false);
-  o["MultiPV"]               << Option(1, 1, 500);
-  o["Move Overhead"]         << Option(10, 0, 5000);
-  o["Slow Mover"]            << Option(100, 10, 1000);
-  o["nodestime"]             << Option(0, 0, 10000);
-  o["Mate Threat Depth"]     << Option(1, 0, 10, on_mate_threat_depth);
-  o["Repetition Rule"]       << Option("AsianRule var AsianRule var ChineseRule", "AsianRule" , on_repetition_rule);
-  o["UCI_ShowWDL"]           << Option(false);
-  o["EvalFile"]              << Option(EvalFileDefaultName, on_eval_file);
+  o["Debug Log File"] << Option("", on_logger);
+  o["Threads"] << Option(1, 1, 1024, on_threads);
+  o["Hash"] << Option(16, 1, MaxHashMB, on_hash_size);
+  o["Clear Hash"] << Option(on_clear_hash);
+  o["Ponder"] << Option(false);
+  o["MultiPV"] << Option(1, 1, 500);
+  o["Move Overhead"] << Option(10, 0, 5000);
+  o["Slow Mover"] << Option(100, 10, 1000);
+  o["nodestime"] << Option(0, 0, 10000);
+  o["Mate Threat Depth"] << Option(1, 0, 10, on_mate_threat_depth);
+  o["Repetition Rule"] << Option("Computer var Computer var Chinese", "Computer",
+                                  on_repetition_rule);
+  o["UCI_ShowWDL"] << Option(false);
+  o["EvalFile"] << Option(EvalFileDefaultName, on_eval_file);
+  o["AutoThreadCount"] << Option(false, on_auto_thread_count);
 }
 
 
