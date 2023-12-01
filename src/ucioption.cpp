@@ -28,6 +28,10 @@
 #include <sstream>
 #include <string>
 
+#if defined(__GNUC__)
+#include <sys/sysinfo.h>
+#endif
+
 #include "evaluate.h"
 #include "misc.h"
 #include "search.h"
@@ -54,6 +58,17 @@ static void on_threads(const Option& o) { Threads.set(size_t(o)); }
 static void on_mate_threat_depth(const Option& o) { MateThreatDepth = size_t(o); }
 static void on_repetition_rule(const Option& o) { ChineseRule = o == "Chinese"; }
 static void on_eval_file(const Option&) { Eval::NNUE::init(); }
+static void on_auto_thread_count(const Option& o) {
+    size_t requested = 1;
+    if (bool(o)) {
+#if defined(__GNUC__)
+        requested = (size_t) get_nprocs();
+#endif
+    } else {
+        requested = size_t(Options["Threads"]);
+    }
+    Threads.set(requested);
+}
 
 // Our case insensitive less() function as required by UCI protocol
 bool CaseInsensitiveLess::operator()(const string& s1, const string& s2) const {
@@ -82,6 +97,7 @@ void init(OptionsMap& o) {
                                    on_repetition_rule);
     o["UCI_ShowWDL"] << Option(false);
     o["EvalFile"] << Option(EvalFileDefaultName, on_eval_file);
+    o["AutoThreadCount"] << Option(false, on_auto_thread_count);
 }
 
 
